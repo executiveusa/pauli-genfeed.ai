@@ -13,8 +13,15 @@ fi
 # Use the same rolling-stable policy as local setup and CI.
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BUN_VERSION=$(xargs < "$SCRIPT_DIR/../../.bun-version")
-# FIX CANDIDATE (diag branch): prefer a real bun on PATH; bunx indirection fails on Vercel image.
+# Prefer a real bun on PATH only when it exactly matches the pinned version;
+# bunx indirection fails on Vercel's build image, but an unversioned PATH bun
+# would silently drift from .bun-version. Fall through to the pinned bunx
+# bootstrap on mismatch or absence.
 if command -v bun >/dev/null 2>&1; then
-  exec bun "$@"
+  PATH_BUN_VERSION=$(bun --version 2>/dev/null || true)
+  if [ "$PATH_BUN_VERSION" = "$BUN_VERSION" ]; then
+    exec bun "$@"
+  fi
+  echo "vercel-bun: PATH bun $PATH_BUN_VERSION != pinned $BUN_VERSION, using pinned bunx fallback" >&2
 fi
 exec bunx "bun@$BUN_VERSION" "$@"
