@@ -15,4 +15,9 @@ const config = createWebpackConfig({
 // monorepo self-alias, so drop the alias for this app's bundle.
 delete config.resolve.alias['@slack'];
 
+// node-pty loads its native binding relative to the real package at runtime;
+// under bun's isolated store the default externals emit an absolute build-host
+// path. Pin a bare commonjs external so runtime resolves 'node-pty' normally.
+config.externals.unshift({ 'node-pty': 'commonjs node-pty' });
+
 module.exports = config;
