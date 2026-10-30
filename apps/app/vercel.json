@@ -1,14 +1,31 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "alias": ["app.genfeed.ai"],
   "buildCommand": "cd ../../ && sh scripts/sh/vercel-bun.sh run build:app",
+  "installCommand": "cd ../../ && sh scripts/sh/vercel-bun.sh install --ignore-scripts",
+  "outputDirectory": ".next",
+  "rewrites": [
+    {
+      "source": "/v1",
+      "destination": "https://genfeed-api.31.220.58.212.sslip.io/v1"
+    },
+    {
+      "source": "/v1/:path*",
+      "destination": "https://genfeed-api.31.220.58.212.sslip.io/v1/:path*"
+    },
+    {
+      "source": "/mcp",
+      "destination": "https://genfeed-mcp.31.220.58.212.sslip.io/mcp"
+    },
+    {
+      "source": "/mcp/:path*",
+      "destination": "https://genfeed-mcp.31.220.58.212.sslip.io/mcp/:path*"
+    }
+  ],
   "git": {
     "deploymentEnabled": {
       "*": false,
       "master": false,
       "staging": false
     }
-  },
-  "installCommand": "cd ../../ && sh scripts/sh/vercel-bun.sh install --ignore-scripts",
-  "outputDirectory": ".next"
+  }
 }
