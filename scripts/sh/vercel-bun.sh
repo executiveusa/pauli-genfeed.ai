@@ -13,4 +13,8 @@ fi
 # Use the same rolling-stable policy as local setup and CI.
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BUN_VERSION=$(xargs < "$SCRIPT_DIR/../../.bun-version")
+# FIX CANDIDATE (diag branch): prefer a real bun on PATH; bunx indirection fails on Vercel image.
+if command -v bun >/dev/null 2>&1; then
+  exec bun "$@"
+fi
 exec bunx "bun@$BUN_VERSION" "$@"
