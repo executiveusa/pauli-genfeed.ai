@@ -1438,15 +1438,53 @@ function routePlaywrightBypassRequest(req: NextRequest): Promise<NextResponse> {
   );
 }
 
+
+// Edge gate: browser talks only to this Vercel origin (Vercel Authentication SSO on
+// previews). /v1/* and /local/* are rewritten to the 212 edge with a secret header
+// the edge requires; direct hits on the edge origins without it get 403.
+// Secret via sensitive env (agent-held service credential), never in code.
+const EDGE_API_ORIGIN = process.env.EDGE_API_ORIGIN; // https://genfeed-api.31.220.58.212.sslip.io
+const EDGE_FILES_ORIGIN = process.env.EDGE_FILES_ORIGIN; // https://genfeed-files.31.220.58.212.sslip.io
+const EDGE_GATE_SECRET = process.env.EDGE_GATE_SECRET; // sensitive env, vault-held
+
+function proxyWithEdgeGate(request: NextRequest, origin: string) {
+  const url = new URL(request.url);
+  const upstream = origin + url.pathname + url.search;
+  const headers = new Headers(request.headers);
+  headers.set('x-edge-gate', EDGE_GATE_SECRET ?? '');
+  headers.delete('host');
+  return NextResponse.rewrite(upstream, { request: { headers } });
+}
+
 export async function proxy(req: NextRequest) {
-  // These same-origin API routes must reach their route/rewrite without
-  // entering app-page auth or workspace slug routing.
+  // Same-origin version route stays local.
+  if (req.nextUrl.pathname === '/api/version') {
+    return NextResponse.next();
+  }
+
+  // Edge-gated API proxy: inject the gate credential and rewrite upstream.
   if (
-    req.nextUrl.pathname === '/api/version' ||
     req.nextUrl.pathname === '/v1' ||
     req.nextUrl.pathname.startsWith('/v1/')
   ) {
-    return NextResponse.next();
+    if (!EDGE_GATE_SECRET || !EDGE_API_ORIGIN || !EDGE_FILES_ORIGIN) {
+      return new NextResponse('edge not configured', { status: 503 });
+    }
+    return proxyWithEdgeGate(req, EDGE_API_ORIGIN);
+  }
+
+  // Edge-gated media proxy: read-only (GET/HEAD), everything else 403.
+  if (
+    req.nextUrl.pathname === '/local' ||
+    req.nextUrl.pathname.startsWith('/local/')
+  ) {
+    if (!EDGE_GATE_SECRET || !EDGE_API_ORIGIN || !EDGE_FILES_ORIGIN) {
+      return new NextResponse('edge not configured', { status: 503 });
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return new NextResponse(null, { status: 403 });
+    }
+    return proxyWithEdgeGate(req, EDGE_FILES_ORIGIN);
   }
 
   const minimumVersionResponse = enforceMinimumDesktopVersion(req);
@@ -1507,5 +1545,9 @@ export const config = {
   matcher: [
     '/((?!_next|serwist(?:/|$)|v1(?:/|$)|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|xml|txt)).*)',
     '/(api|trpc)(.*)',
+    '/v1',
+    '/v1/:path*',
+    '/local',
+    '/local/:path*',
   ],
 };
