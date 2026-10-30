@@ -176,7 +176,15 @@ vi.mock('@genfeedai/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@genfeedai/actions')>();
   return {
     ...actual,
-    getToolByName: vi.fn((name: string) => TOOLS_BY_NAME.get(name)),
+    getToolByName: vi.fn((name: string) => {
+      const stub = TOOLS_BY_NAME.get(name);
+      // Keep the hand-written presentation stubs, but back them with the real
+      // canonical parameter schema so argument-contract validation runs on
+      // the same shape production enforces.
+      return stub && !stub.parameters
+        ? { ...stub, parameters: actual.getToolByName(name)?.parameters }
+        : stub;
+    }),
     getToolsForSurface: vi.fn(
       (surface: Parameters<typeof actual.getToolsForSurface>[0]) =>
         surface === 'mcp' ? MOCK_TOOLS : actual.getToolsForSurface(surface),
@@ -575,6 +583,64 @@ describe('ToolRegistryService', () => {
         {},
         undefined,
       );
+    });
+  });
+
+  describe('argument contract validation (approval must never queue an unexecutable call)', () => {
+    it('rejects undeclared create_post arguments before any approval is queued', async () => {
+      const result = await service.handleToolCall({
+        arguments: { description: 'y', label: 'x' },
+        name: 'create_post',
+      });
+
+      expect(clientService.createApproval).not.toHaveBeenCalled();
+      expect(clientService.executeAgentTool).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { code: 'validation_failed' },
+      });
+      expect(JSON.stringify(result)).toContain('label');
+      expect(JSON.stringify(result)).toContain('description');
+      expect(JSON.stringify(result)).toContain('Valid arguments');
+    });
+
+    it('runs an advertised text-draft create_post directly (designed ungated branch)', async () => {
+      await service.handleToolCall({
+        arguments: { content: 'harmless draft text', platform: 'twitter' },
+        name: 'create_post',
+      });
+
+      // A bounded standalone text draft cannot spend credits or publish, so
+      // it skips the approval gate by design (mcp-draft-call-policy).
+      expect(clientService.createApproval).not.toHaveBeenCalled();
+      expect(clientService.executeAgentTool).toHaveBeenCalledTimes(1);
+      expect(clientService.executeAgentTool.mock.calls[0][0]).toBe(
+        'create_post',
+      );
+      expect(clientService.executeAgentTool.mock.calls[0][1]).toEqual({
+        content: 'harmless draft text',
+        platform: 'twitter',
+      });
+    });
+
+    it('keeps the dedicated brand_required response for brandless generate calls', async () => {
+      clientService.executeAgentTool.mockResolvedValueOnce({
+        brands: [
+          { id: 'brand-1', label: 'Acme' },
+          { id: 'brand-2', label: 'Beta' },
+        ],
+      });
+
+      const result = await service.handleToolCall({
+        arguments: { prompt: 'AI surfing', type: 'image' },
+        name: 'generate',
+      });
+
+      expect(clientService.createApproval).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { code: 'brand_required' },
+      });
     });
   });
 

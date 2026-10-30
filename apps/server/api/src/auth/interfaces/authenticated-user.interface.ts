@@ -26,6 +26,8 @@ export interface AuthenticatedUser {
   stripeSubscriptionStatus?: string;
   subscriptionTier?: string;
   isApiKey?: boolean;
+  /** True when the caller key is restricted to the Genfeed MCP bridge. */
+  isBridgeOnlyApiKey?: boolean;
   emailAddresses?: IAuthenticatedEmailAddress[];
   firstName?: string | null;
   lastName?: string | null;

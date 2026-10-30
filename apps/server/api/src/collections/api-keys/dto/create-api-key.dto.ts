@@ -4,6 +4,7 @@ import { SELF_SERVICE_API_KEY_SCOPES } from '@genfeedai/contracts/constants';
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsIn,
@@ -54,6 +55,18 @@ export class CreateApiKeyDto {
     isArray: true,
     required: false,
   })
+  @ApiProperty({
+    description:
+      'Restrict this key to the Genfeed MCP bridge. When true, direct API ' +
+      'calls with this key are rejected; only MCP-proxied requests carrying ' +
+      'the trusted origin proof are accepted. Only session (non-key) ' +
+      'callers can set this.',
+    required: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  readonly bridgeOnly?: boolean;
+
   @IsOptional()
   @IsArray()
   @IsString({ each: true })

@@ -309,6 +309,7 @@ describe('ApiKeyAuthGuard', () => {
         brandId: mockFallbackBrandId,
         id: mockApiKey.userId.toString(),
         isApiKey: true,
+        isBridgeOnlyApiKey: false,
         isSuperAdmin: false,
         organizationId: mockApiKey.organizationId.toString(),
         scopes: mockApiKey.scopes,
@@ -463,5 +464,130 @@ describe('ApiKeyAuthGuard', () => {
         '192.168.1.2',
       );
     });
+  });
+});
+
+describe('ApiKeyAuthGuard bridgeOnly enforcement', () => {
+  let guard: ApiKeyAuthGuard;
+  let mockService: Record<string, ReturnType<typeof vi.fn>>;
+  let request: ReturnType<typeof buildMockRequest>;
+  let mockContext: ExecutionContext;
+
+  const bridgeKey = {
+    ...({
+      allowedIps: [],
+      category: ApiKeyCategory.GENFEEDAI,
+      createdAt: new Date(),
+      defaultBrandId: null,
+      description: null,
+      expiresAt: null,
+      id: testId('apikey'),
+      isRevoked: false,
+      key: 'hashed',
+      keyFingerprint: null,
+      label: 'bridge key',
+      lastUsedAt: null,
+      lastUsedIp: null,
+      metadata: { bridgeOnly: true },
+      organizationId: testId('org'),
+      rateLimit: 60,
+      revokedAt: null,
+      scopes: ['posts:draft'],
+      updatedAt: new Date(),
+      usageCount: 0,
+      userId: testId('user'),
+    } as unknown as import('@api/collections/api-keys/schemas/api-key.schema').ApiKeyDocument),
+  };
+
+  beforeEach(async () => {
+    request = buildMockRequest({
+      connection: { remoteAddress: '192.168.1.1' },
+      headers: { authorization: 'Bearer gf_test_bridge' },
+      ip: '192.168.1.1',
+      user: null,
+    });
+    mockContext = createMockExecutionContext({ request });
+    mockService = {
+      canSwitchOrganizations: vi.fn().mockReturnValue(false),
+      checkRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
+      findByKey: vi.fn().mockResolvedValue(bridgeKey),
+      hasScope: vi.fn().mockReturnValue(true),
+      hasTrustedMcpOriginProof: vi.fn().mockReturnValue(false),
+      isIpAllowed: vi.fn().mockReturnValue(true),
+      isMcpOAuthSession: vi.fn().mockReturnValue(false),
+      readMcpAccessMode: vi.fn().mockReturnValue('standard'),
+      resolveActionOrigin: vi.fn().mockReturnValue(ActionOrigin.API),
+      resolveAnyBrandId: vi.fn().mockResolvedValue(testId('brand')),
+      resolveEffectiveOrganizationId: vi
+        .fn()
+        .mockImplementation(async (key: { organizationId: string }) =>
+          String(key.organizationId),
+        ),
+      resolveValidDefaultBrandId: vi.fn().mockResolvedValue(undefined),
+      updateLastUsed: vi.fn(),
+    };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ApiKeyAuthGuard,
+        { provide: ApiKeysService, useValue: mockService },
+        { provide: Reflector, useValue: { get: vi.fn() } },
+      ],
+    }).compile();
+    guard = module.get<ApiKeyAuthGuard>(ApiKeyAuthGuard);
+  });
+
+  it('rejects a bridgeOnly key without a trusted MCP origin proof', async () => {
+    mockService.hasTrustedMcpOriginProof.mockReturnValue(false);
+    await expect(guard.canActivate(mockContext)).rejects.toThrow(
+      new UnauthorizedException(
+        'This API key is restricted to the Genfeed MCP bridge',
+      ),
+    );
+    expect(mockService.hasTrustedMcpOriginProof).toHaveBeenCalledWith(
+      undefined,
+      true,
+    );
+  });
+
+  it('rejects a bridgeOnly key when the proof does not verify', async () => {
+    request = buildMockRequest({
+      ...request,
+      headers: {
+        authorization: 'Bearer gf_test_bridge',
+        'x-genfeed-mcp-origin-proof': 'forged',
+      },
+    });
+    mockContext = createMockExecutionContext({ request });
+    mockService.hasTrustedMcpOriginProof.mockReturnValue(false);
+    await expect(guard.canActivate(mockContext)).rejects.toThrow(
+      UnauthorizedException,
+    );
+    expect(mockService.hasTrustedMcpOriginProof).toHaveBeenCalledWith(
+      'forged',
+      true,
+    );
+  });
+
+  it('allows a bridgeOnly key with a trusted MCP origin proof', async () => {
+    request = buildMockRequest({
+      ...request,
+      headers: {
+        authorization: 'Bearer gf_test_bridge',
+        'x-genfeed-mcp-origin-proof': 'valid-proof',
+      },
+    });
+    mockContext = createMockExecutionContext({ request });
+    mockService.hasTrustedMcpOriginProof.mockReturnValue(true);
+    await expect(guard.canActivate(mockContext)).resolves.toBe(true);
+  });
+
+  it('does not apply the proof requirement to non-bridgeOnly keys', async () => {
+    mockService.findByKey.mockResolvedValue({
+      ...bridgeKey,
+      metadata: null,
+    });
+    mockService.hasTrustedMcpOriginProof.mockReturnValue(false);
+    await expect(guard.canActivate(mockContext)).resolves.toBe(true);
+    expect(mockService.hasTrustedMcpOriginProof).not.toHaveBeenCalled();
   });
 });

@@ -1322,3 +1322,70 @@ describe('authorized proactive text draft constraint', () => {
     expect(f.postGroupsService.publishNow).not.toHaveBeenCalled();
   });
 });
+
+describe('threadless text draft brand resolution (MCP/API-key origin)', () => {
+  const threadlessContext = (): ToolExecutionContext => ({
+    organizationId: 'org-1',
+    userId: 'user-1',
+  });
+
+  it('creates the draft on the authorized caller brandId when no validated scope exists', async () => {
+    const f = createHandler();
+    f.agentScopeContextService.assertBrandAuthorized = vi
+      .fn()
+      .mockResolvedValue(undefined);
+    f.postsService.create = vi.fn().mockResolvedValue({ id: 'post-1' });
+    const result = await runWithActionOrigin(
+      { origin: ActionOrigin.MCP },
+      () =>
+        f.handler.createPost(
+          { brandId: 'brand-9', content: 'draft body' },
+          threadlessContext(),
+        ),
+    );
+    expect(result.success).toBe(true);
+    expect(f.agentScopeContextService.assertBrandAuthorized).toHaveBeenCalledWith(
+      'brand-9',
+      { organizationId: 'org-1', userId: 'user-1' },
+    );
+    expect(f.postsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brandId: 'brand-9',
+        organizationId: 'org-1',
+        targetExecutionState: 'draft',
+      }),
+    );
+  });
+
+  it('rejects a threadless draft without brandId before any write', async () => {
+    const f = createHandler();
+    f.agentScopeContextService.assertBrandAuthorized = vi.fn();
+    f.postsService.create = vi.fn();
+    await expect(
+      runWithActionOrigin({ origin: ActionOrigin.MCP }, () =>
+        f.handler.createPost({ content: 'draft body' }, threadlessContext()),
+      ),
+    ).rejects.toThrow(/brandId is required/);
+    expect(f.postsService.create).not.toHaveBeenCalled();
+    expect(
+      f.agentScopeContextService.assertBrandAuthorized,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('refuses a brand the caller is not authorized for', async () => {
+    const f = createHandler();
+    f.agentScopeContextService.assertBrandAuthorized = vi
+      .fn()
+      .mockRejectedValue(new Error('Brand access denied'));
+    f.postsService.create = vi.fn();
+    await expect(
+      runWithActionOrigin({ origin: ActionOrigin.MCP }, () =>
+        f.handler.createPost(
+          { brandId: 'brand-x', content: 'draft body' },
+          threadlessContext(),
+        ),
+      ),
+    ).rejects.toThrow('Brand access denied');
+    expect(f.postsService.create).not.toHaveBeenCalled();
+  });
+});

@@ -19,6 +19,11 @@ export const OVERLAP_TOOLS: SourceTool[] = [
     name: 'create_post',
     parameters: {
       properties: {
+        brandId: {
+          description:
+            'Brand that owns the draft. Required outside an agent thread (MCP, API key): call get_brands and pass one of its ids.',
+          type: 'string',
+        },
         caption: {
           description: 'Caption override for the content item.',
           type: 'string',

@@ -11,6 +11,7 @@ import Joi from 'joi';
 
 interface WorkersEnvConfig extends IEnvConfig {
   GF_DEV_ENABLE_SCHEDULERS?: 'true' | 'false';
+  GF_PLATFORM_SCHEDULES_ENABLED?: 'true' | 'false';
   QUEUE_HEALTH_ALERT_THROTTLE_MINUTES?: number;
   QUEUE_HEALTH_ALERT_WEBHOOK_URL?: string;
   QUEUE_HEALTH_MAX_FAILED?: number;
@@ -32,6 +33,14 @@ export class ConfigService extends createServiceConfig<WorkersEnvConfig>({
   ],
   extend: {
     GF_DEV_ENABLE_SCHEDULERS: Joi.string()
+      .valid('true', 'false')
+      .optional()
+      .allow(''),
+    // Master kill-switch for every platform schedule/cron (registry
+    // reconciliation, the schedules processor and the trends cron all read
+    // isDevSchedulersEnabled). Defaults to enabled so upstream behavior is
+    // unchanged; set to 'false' to run workers with automations OFF.
+    GF_PLATFORM_SCHEDULES_ENABLED: Joi.string()
       .valid('true', 'false')
       .optional()
       .allow(''),
@@ -79,8 +88,18 @@ export class ConfigService extends createServiceConfig<WorkersEnvConfig>({
     SERVICE_NAME: Joi.string().optional().allow(''),
   },
 }) {
+  public get arePlatformSchedulesEnabled(): boolean {
+    return (
+      String(this.get('GF_PLATFORM_SCHEDULES_ENABLED') ?? '').toLowerCase() !==
+      'false'
+    );
+  }
+
   public get isDevSchedulersEnabled(): boolean {
-    return this.isLocalDevFlagEnabled('GF_DEV_ENABLE_SCHEDULERS');
+    return (
+      this.arePlatformSchedulesEnabled &&
+      this.isLocalDevFlagEnabled('GF_DEV_ENABLE_SCHEDULERS')
+    );
   }
 
   public get ingredientsEndpoint(): string {

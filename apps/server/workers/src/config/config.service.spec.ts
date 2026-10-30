@@ -7,6 +7,7 @@ describe('ConfigService (Workers)', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'test';
     delete process.env.GF_DEV_ENABLE_SCHEDULERS;
+    delete process.env.GF_PLATFORM_SCHEDULES_ENABLED;
     process.env.PORT = '3000';
     process.env.SENTRY_ENVIRONMENT = 'test';
     process.env.SENTRY_DSN = 'https://test@sentry.io/test';
@@ -24,6 +25,7 @@ describe('ConfigService (Workers)', () => {
 
   afterEach(() => {
     delete process.env.GF_DEV_ENABLE_SCHEDULERS;
+    delete process.env.GF_PLATFORM_SCHEDULES_ENABLED;
     delete process.env.DATABASE_URL;
     delete process.env.NODE_ENV;
     delete process.env.PORT;
@@ -95,6 +97,36 @@ describe('ConfigService (Workers)', () => {
       configService = new ConfigService();
 
       expect(configService.isDevSchedulersEnabled).toBe(true);
+    });
+
+    it('should enable platform schedules by default (master switch unset)', () => {
+      expect(configService.arePlatformSchedulesEnabled).toBe(true);
+    });
+
+    it('should disable schedulers in production via the master switch', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.GF_PLATFORM_SCHEDULES_ENABLED = 'false';
+      configService = new ConfigService();
+
+      expect(configService.arePlatformSchedulesEnabled).toBe(false);
+      expect(configService.isDevSchedulersEnabled).toBe(false);
+    });
+
+    it('should keep schedulers enabled in production when the master switch is true', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.GF_PLATFORM_SCHEDULES_ENABLED = 'true';
+      configService = new ConfigService();
+
+      expect(configService.isDevSchedulersEnabled).toBe(true);
+    });
+
+    it('should let the master switch override the dev opt-in', () => {
+      process.env.NODE_ENV = 'development';
+      process.env.GF_DEV_ENABLE_SCHEDULERS = 'true';
+      process.env.GF_PLATFORM_SCHEDULES_ENABLED = 'false';
+      configService = new ConfigService();
+
+      expect(configService.isDevSchedulersEnabled).toBe(false);
     });
   });
 

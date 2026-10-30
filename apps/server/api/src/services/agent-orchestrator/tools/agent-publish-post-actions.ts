@@ -442,6 +442,7 @@ export async function createAgentTextDraft(
   params: Record<string, unknown>,
   ctx: ToolExecutionContext,
   visibility: PostVisibility,
+  brandIdOverride?: string,
 ): Promise<AgentToolResult> {
   const post = await postsService.create({
     ...(ctx.runId ? { workflowExecutionId: ctx.runId } : {}),
@@ -449,7 +450,7 @@ export async function createAgentTextDraft(
     agentContextSource: ctx.validatedScope?.source,
     agentContextVersion: ctx.validatedScope?.contextVersion,
     agentThreadId: ctx.validatedScope?.threadId,
-    brandId: ctx.validatedScope?.brandId,
+    brandId: brandIdOverride ?? ctx.validatedScope?.brandId,
     description: params.content as string,
     label: ((params.content as string) || '').substring(0, 100),
     organizationId: ctx.organizationId,

@@ -102,7 +102,9 @@ export {
   MCP_BRAND_REQUIRED_NOTE,
   MCP_BRAND_REQUIRED_TOOL_NAMES,
   readMcpBrandId,
+  withRequiredMcpBrandId,
 } from './registry/mcp-brand-required';
+export { projectMcpParameters } from './registry/mcp-schema-projection';
 export {
   getMcpCatalogOperations,
   getRetiredMcpCatalogTool,

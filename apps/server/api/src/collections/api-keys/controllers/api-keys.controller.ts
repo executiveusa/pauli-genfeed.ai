@@ -24,6 +24,7 @@ import { RateLimit } from '@api/shared/decorators/rate-limit/rate-limit.decorato
 import {
   ActionOrigin,
   API_KEY_ACTION_ORIGIN_METADATA_KEY,
+  API_KEY_BRIDGE_ONLY_METADATA_KEY,
   API_KEY_ACTION_ORIGIN_PROOF_METADATA_KEY,
   ApiKeyCategory,
 } from '@genfeedai/contracts';
@@ -102,6 +103,7 @@ export class ApiKeysController {
       [CONNECT_GENFEED_VERIFICATION_METADATA_KEY]: _connectGenfeedVerification,
       kind: _kind,
       mcpAccessMode: _mcpAccessMode,
+      [API_KEY_BRIDGE_ONLY_METADATA_KEY]: _bridgeOnly,
       resource: _resource,
       grantId: _grantId,
       clientName: _clientName,
@@ -201,6 +203,21 @@ export class ApiKeysController {
       );
     }
 
+    // Bridge-restricted keys must not mint further credentials: a minted key
+    // would inherit no bridgeOnly flag and escape the bridge boundary. Legacy
+    // keys keep their existing subset-mint behavior (scopes are capped to the
+    // caller by assertNoKeyPrivilegeEscalation/scopesWithinCaller below).
+    if (user.isApiKey === true && user.isBridgeOnlyApiKey === true) {
+      throw new HttpException(
+        {
+          detail:
+            'Bridge-restricted API keys cannot create other API keys. Sign in to create keys.',
+          title: 'Forbidden',
+        },
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
     await this.assertNoKeyPrivilegeEscalation(user, createApiKeyDto, true);
 
     const { apiKey, plainKey } = await this.apiKeysService.createWithKey({
@@ -208,6 +225,7 @@ export class ApiKeysController {
       ...(user.isApiKey === true && createApiKeyDto.scopes == null
         ? { scopes: scopesWithinCaller(user.scopes) }
         : {}),
+      bridgeOnly: createApiKeyDto.bridgeOnly === true,
       metadata: this.withoutReservedMetadata(createApiKeyDto.metadata),
       organizationId: user.organizationId,
       userId: user.userId ?? user.id,

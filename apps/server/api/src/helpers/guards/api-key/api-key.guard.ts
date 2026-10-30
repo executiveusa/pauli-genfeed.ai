@@ -1,6 +1,9 @@
 import { ApiKeysService } from '@api/collections/api-keys/services/api-keys.service';
 import { RateLimitError } from '@api/helpers/exceptions/api/api-error.exception';
-import { MCP_ACTION_ORIGIN_PROOF_HEADER } from '@genfeedai/contracts';
+import {
+  API_KEY_BRIDGE_ONLY_METADATA_KEY,
+  MCP_ACTION_ORIGIN_PROOF_HEADER,
+} from '@genfeedai/contracts';
 import { parseAuthorizationHeader } from '@libs/auth/authorization-header';
 import {
   CanActivate,
@@ -46,6 +49,24 @@ export class ApiKeyAuthGuard implements CanActivate {
     const apiKey = await this.apiKeysService.findByKey(key);
     if (!apiKey) {
       throw new UnauthorizedException('Invalid or expired API key');
+    }
+
+    const apiKeyMetadata =
+      apiKey.metadata &&
+      typeof apiKey.metadata === 'object' &&
+      !Array.isArray(apiKey.metadata)
+        ? (apiKey.metadata as Record<string, unknown>)
+        : {};
+    if (
+      apiKeyMetadata[API_KEY_BRIDGE_ONLY_METADATA_KEY] === true &&
+      !this.apiKeysService.hasTrustedMcpOriginProof(
+        request.headers[MCP_ACTION_ORIGIN_PROOF_HEADER],
+        true,
+      )
+    ) {
+      throw new UnauthorizedException(
+        'This API key is restricted to the Genfeed MCP bridge',
+      );
     }
 
     if (
@@ -122,6 +143,8 @@ export class ApiKeyAuthGuard implements CanActivate {
       brandId: requestScopedBrandId ?? '',
       id: apiKey.userId,
       isApiKey: true,
+      isBridgeOnlyApiKey:
+        apiKeyMetadata[API_KEY_BRIDGE_ONLY_METADATA_KEY] === true,
       isSuperAdmin: false,
       organizationId,
       scopes: apiKey.scopes,

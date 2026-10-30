@@ -11,9 +11,11 @@ import {
   type McpAccessMode,
   type McpBrandOption,
   type McpToolOutput,
+  projectMcpParameters,
   readMcpBrandId,
   type ToolsetName,
   toMcpTools,
+  withRequiredMcpBrandId,
 } from '@genfeedai/actions';
 import { formatAgentError } from '@genfeedai/agent/server';
 import { APP_ROUTES } from '@genfeedai/contracts/constants';
@@ -78,6 +80,7 @@ import { EDITOR_TOOL_NAMES, handleEditorTool } from '@mcp/tools/editor.tool';
 import { handleGoogleAdsTool } from '@mcp/tools/google-ads.tool';
 import {
   approvalPendingToolResult,
+  type McpToolError,
   mcpToolErrorResult,
   toMcpToolErrorResult,
 } from '@mcp/tools/mcp-tool-error';
@@ -418,6 +421,32 @@ export class ToolRegistryService implements OnModuleInit {
       // Rejected before any approval or charge: a generation always names its brand.
       if (isMcpBrandRequiredTool(name) && !readMcpBrandId(args)) {
         return await this.brandRequiredResult();
+      }
+
+      // Validate direct calls against the exact schema tools/list advertises
+      // BEFORE any approval is queued: approvals replay arguments verbatim at
+      // execution, and execution contracts set additionalProperties:false, so
+      // an undeclared field would otherwise surface only after the owner
+      // approved - an approval that can never succeed. Catalog-alias calls
+      // keep their legacy mapping semantics (their advertised alias schemas
+      // and accepted arguments already differ upstream); the execution
+      // contract still enforces them. A tool with no declared schema cannot
+      // be pre-validated and is left to the execution contract. Missing-field
+      // validation stays with each tool's tailored errors.
+      if (!catalogCall && canonicalTool.parameters) {
+        const advertisedParameters = isMcpBrandRequiredTool(name)
+          ? withRequiredMcpBrandId(
+              projectMcpParameters(name, canonicalTool.parameters),
+            )
+          : projectMcpParameters(name, canonicalTool.parameters);
+        const argumentError = findUndeclaredToolArguments(
+          name,
+          args ?? {},
+          advertisedParameters,
+        );
+        if (argumentError) {
+          return mcpToolErrorResult(argumentError);
+        }
       }
 
       // Declared approvals and credit spenders wait for confirmation, unless the
@@ -996,4 +1025,32 @@ export class ToolRegistryService implements OnModuleInit {
   setBearerToken(token: string) {
     this.clientService.setBearerToken(token);
   }
+}
+/**
+ * Compare a call's arguments with the exact parameter schema that tools/list
+ * advertises for the tool (projection + required brandId applied by the
+ * caller). Returns a validation_failed tool error when the call names
+ * undeclared fields or omits required ones; null when the call is declared.
+ * Execution-side action contracts set additionalProperties:false, so this is
+ * the same boundary, enforced before an approval can be queued.
+ */
+function findUndeclaredToolArguments(
+  name: string,
+  args: Record<string, unknown>,
+  parameters: { properties?: Record<string, unknown> },
+): McpToolError | null {
+  if (!isRecord(args)) {
+    return null;
+  }
+  const properties = parameters?.properties ?? {};
+  const declared = Object.keys(properties).sort();
+  const unknown = Object.keys(args).filter((key) => !(key in properties));
+  if (unknown.length === 0) {
+    return null;
+  }
+  return {
+    code: 'validation_failed',
+    message: `${name}: Unknown argument(s): ${unknown.join(', ')}. Valid arguments: ${declared.join(', ')}.`,
+    toolName: name,
+  };
 }

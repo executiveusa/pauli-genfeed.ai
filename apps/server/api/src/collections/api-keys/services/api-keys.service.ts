@@ -18,6 +18,7 @@ import {
   ActionOrigin,
   API_KEY_ACTION_ORIGIN_METADATA_KEY,
   API_KEY_ACTION_ORIGIN_PROOF_METADATA_KEY,
+  API_KEY_BRIDGE_ONLY_METADATA_KEY,
   ApiKeyScope,
 } from '@genfeedai/contracts';
 import {
@@ -215,7 +216,8 @@ export class ApiKeysService extends BaseService<
     },
     trustedOrigin?: ActionOrigin.CLI | ActionOrigin.MCP | ActionOrigin.UI,
   ): Promise<{ apiKey: ApiKeyDocument; plainKey: string }> {
-    const scopes = createApiKeyDto.scopes ?? [...DEFAULT_API_KEY_SCOPES];
+    const { bridgeOnly, ...dtoWithoutBridgeOnly } = createApiKeyDto;
+    const scopes = dtoWithoutBridgeOnly.scopes ?? [...DEFAULT_API_KEY_SCOPES];
     this.assertValidScopes(scopes);
     await this.assertValidDefaultBrandId(
       createApiKeyDto.organizationId,
@@ -227,15 +229,20 @@ export class ApiKeysService extends BaseService<
     const keyFingerprint = this.computeFingerprint(plainKey);
 
     const apiKeyData = {
-      ...createApiKeyDto,
+      ...dtoWithoutBridgeOnly,
       isRevoked: false,
       key: hashedKey,
       keyFingerprint,
-      metadata: this.buildApiKeyMetadata(
-        createApiKeyDto,
-        keyFingerprint,
-        trustedOrigin,
-      ),
+      metadata: {
+        ...this.buildApiKeyMetadata(
+          dtoWithoutBridgeOnly,
+          keyFingerprint,
+          trustedOrigin,
+        ),
+        ...(bridgeOnly === true
+          ? { [API_KEY_BRIDGE_ONLY_METADATA_KEY]: true }
+          : {}),
+      },
       rateLimit: createApiKeyDto.rateLimit || 60,
       scopes,
       usageCount: 0,
@@ -581,6 +588,7 @@ export class ApiKeysService extends BaseService<
     const {
       [API_KEY_ACTION_ORIGIN_METADATA_KEY]: _untrustedOrigin,
       [API_KEY_ACTION_ORIGIN_PROOF_METADATA_KEY]: _untrustedProof,
+      [API_KEY_BRIDGE_ONLY_METADATA_KEY]: _untrustedBridgeOnly,
       [CONNECT_GENFEED_VERIFICATION_METADATA_KEY]:
         _untrustedConnectGenfeedVerification,
       ...untrustedMetadata

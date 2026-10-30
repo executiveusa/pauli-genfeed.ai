@@ -935,16 +935,54 @@ export class AgentPublishToolHandler {
       });
     }
 
-    await this.assertPublishingScope(
-      ctx,
-      ctx.validatedScope?.brandId,
-      'post creation',
-    );
+    const draftBrandId = await this.resolveTextDraftBrand(params, ctx);
 
     if (ctx.isProactive)
       return this.createProactiveTextPost(params, ctx, visibility);
 
-    return createAgentTextDraft(this.postsService, params, ctx, visibility);
+    return createAgentTextDraft(
+      this.postsService,
+      params,
+      ctx,
+      visibility,
+      draftBrandId,
+    );
+  }
+
+  /**
+   * Thread runs carry a server-validated scope; threadless origins (MCP, API
+   * key, approval redemption) do not, so their brandId is authorized against
+   * the server-side brand ACL instead of requiring a thread scope.
+   */
+  private async resolveTextDraftBrand(
+    params: Record<string, unknown>,
+    ctx: ToolExecutionContext,
+  ): Promise<string | undefined> {
+    if (ctx.validatedScope) {
+      await this.assertPublishingScope(
+        ctx,
+        ctx.validatedScope.brandId,
+        'post creation',
+      );
+      return ctx.validatedScope.brandId;
+    }
+    if (!this.agentScopeContextService) {
+      throw new Error(
+        'Agent scope validation is required before creating drafts.',
+      );
+    }
+    const brandId = readOptionalString(params.brandId);
+    if (!brandId) {
+      throw new Error(
+        'brandId is required to create a post draft outside an agent thread. Call get_brands and pass one of its ids.',
+      );
+    }
+    await this.agentScopeContextService.assertBrandAuthorized(brandId, {
+      userId: ctx.userId,
+      organizationId: ctx.organizationId,
+      ...ctx.apiKeyContext,
+    });
+    return brandId;
   }
 
   private createProactiveTextPost(

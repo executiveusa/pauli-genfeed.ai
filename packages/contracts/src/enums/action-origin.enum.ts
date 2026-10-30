@@ -33,3 +33,11 @@ export const API_KEY_ACTION_ORIGIN_METADATA_KEY = 'actionOrigin';
 
 /** Server signature paired with trusted API-key action-origin metadata. */
 export const API_KEY_ACTION_ORIGIN_PROOF_METADATA_KEY = 'actionOriginProof';
+
+/**
+ * Reserved API-key metadata flag: the key may only be used through the
+ * Genfeed MCP bridge (a request carrying a trusted MCP origin proof).
+ * Set only at key creation by a session caller; never accepted from or
+ * propagated by API-key callers.
+ */
+export const API_KEY_BRIDGE_ONLY_METADATA_KEY = 'bridgeOnly';

@@ -791,6 +791,76 @@ describe('ApiKeysController', () => {
       expect(mockApiKeysService.createWithKey).toHaveBeenCalled();
     });
 
+    it('rejects key creation by a bridgeOnly API-key caller (no escape from bridge)', async () => {
+      mockCallerKey();
+
+      await expect(
+        controller.create(
+          mockRequest,
+          { ...callerUser, isBridgeOnlyApiKey: true },
+          {
+            category: ApiKeyCategory.GENFEEDAI,
+            label: 'bridge spawn attempt',
+            scopes: ['images:read'],
+          } as CreateApiKeyDto,
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(mockApiKeysService.createWithKey).not.toHaveBeenCalled();
+    });
+
+    it('lets a bridgeOnly session-created key request through for session callers', async () => {
+      mockApiKeysService.findAll.mockResolvedValue({
+        docs: [],
+        limit: 100,
+        page: 1,
+        totalDocs: 0,
+        totalPages: 0,
+      });
+      mockApiKeysService.createWithKey.mockResolvedValue({
+        apiKey: mockApiKey,
+        plainKey: 'plain_api_key_12345',
+      });
+
+      await controller.create(mockRequest, mockUser, {
+        category: ApiKeyCategory.GENFEEDAI,
+        label: 'bridge key',
+        bridgeOnly: true,
+        scopes: ['read'],
+      } as CreateApiKeyDto);
+
+      expect(mockApiKeysService.createWithKey).toHaveBeenCalledWith(
+        expect.objectContaining({ bridgeOnly: true }),
+      );
+    });
+
+    it('strips a caller-supplied bridgeOnly marker from metadata', async () => {
+      mockApiKeysService.findAll.mockResolvedValue({
+        docs: [],
+        limit: 100,
+        page: 1,
+        totalDocs: 0,
+        totalPages: 0,
+      });
+      mockApiKeysService.createWithKey.mockResolvedValue({
+        apiKey: mockApiKey,
+        plainKey: 'plain_api_key_12345',
+      });
+
+      await controller.create(mockRequest, mockUser, {
+        category: ApiKeyCategory.GENFEEDAI,
+        label: 'smuggled bridge flag',
+        metadata: { bridgeOnly: true, purpose: 'smuggle' },
+        scopes: ['read'],
+      } as unknown as CreateApiKeyDto);
+
+      expect(mockApiKeysService.createWithKey).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bridgeOnly: false,
+          metadata: { purpose: 'smuggle' },
+        }),
+      );
+    });
+
     it('rejects widening scopes or clearing the IP allowlist on update', async () => {
       mockCallerKey({ allowedIps: ['203.0.113.7'] });
 
