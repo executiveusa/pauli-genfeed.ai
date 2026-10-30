@@ -653,6 +653,111 @@ describe('proxy', () => {
     );
   });
 
+  it('sends the edge gate header to the fixed edge API origin for server-side auth calls', async () => {
+    vi.stubEnv('EDGE_API_ORIGIN', 'https://edge.example.test/');
+    vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
+    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://files.example.test');
+    vi.resetModules();
+
+    const { default: proxy } = await import('./proxy');
+
+    const response = await proxy(makeSignedInRequest('/workspace'));
+
+    expect(response.status).toBe(307);
+    const calls = fetchMock.mock.calls.map(([input, init]) => ({
+      headers: (init as { headers?: Record<string, string> } | undefined)
+        ?.headers,
+      url: String(input),
+    }));
+    const urls = calls.map((call) => call.url);
+    expect(urls).toContain('https://edge.example.test/v1/auth/token');
+    expect(urls).toContain('https://edge.example.test/v1/auth/bootstrap');
+    expect(urls).toContain(
+      'https://edge.example.test/v1/organizations?mine=true',
+    );
+    for (const call of calls) {
+      expect(call.url.startsWith('https://edge.example.test/v1/')).toBe(true);
+      expect(call.headers?.['x-edge-gate']).toBe('test-gate-secret');
+    }
+    // the session cookie still goes only to the token exchange, never a bearer
+    const tokenCall = calls.find((call) => call.url.endsWith('/auth/token'));
+    expect(tokenCall?.headers?.cookie).toContain('better-auth.session_token=');
+    const bootstrapCall = calls.find((call) =>
+      call.url.endsWith('/auth/bootstrap'),
+    );
+    expect(bootstrapCall?.headers?.Authorization).toBe(
+      `Bearer ${BEARER_TOKEN}`,
+    );
+  });
+
+  it('never follows a redirect on the server-side API calls that carry credentials', async () => {
+    vi.stubEnv('EDGE_API_ORIGIN', 'https://edge.example.test');
+    vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
+    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://files.example.test');
+    vi.resetModules();
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(null, {
+          headers: { location: 'https://attacker.example.test/steal' },
+          status: 302,
+        }),
+    );
+
+    const { default: proxy } = await import('./proxy');
+
+    const response = await proxy(makeSignedInRequest('/workspace'));
+
+    expect(response.status).toBe(307);
+    expect(new URL(response.headers.get('location') as string).pathname).toBe(
+      '/login',
+    );
+    expect(fetchMock).toHaveBeenCalled();
+    for (const [input, init] of fetchMock.mock.calls) {
+      expect(String(input).startsWith('https://edge.example.test/v1/')).toBe(
+        true,
+      );
+      expect((init as { redirect?: string }).redirect).toBe('manual');
+    }
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes('attacker')),
+    ).toBe(false);
+  });
+
+  it('never sends the gate secret to the plain API base when only the secret is configured', async () => {
+    vi.stubEnv('EDGE_API_ORIGIN', undefined);
+    vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
+    vi.resetModules();
+
+    const { default: proxy } = await import('./proxy');
+
+    await proxy(makeSignedInRequest('/workspace'));
+
+    expect(fetchMock).toHaveBeenCalled();
+    for (const [input, init] of fetchMock.mock.calls) {
+      expect(String(input).startsWith('http://localhost:3010/v1/')).toBe(true);
+      expect(
+        (init as { headers?: Record<string, string> }).headers?.['x-edge-gate'],
+      ).toBeUndefined();
+    }
+  });
+
+  it('keeps the plain API base and sends no gate header when the edge env is absent', async () => {
+    vi.stubEnv('EDGE_API_ORIGIN', undefined);
+    vi.stubEnv('EDGE_GATE_SECRET', undefined);
+    vi.resetModules();
+
+    const { default: proxy } = await import('./proxy');
+
+    await proxy(makeSignedInRequest('/workspace'));
+
+    for (const [input, init] of fetchMock.mock.calls) {
+      expect(String(input).startsWith('http://localhost:3010/v1/')).toBe(true);
+      expect(
+        (init as { headers?: Record<string, string> }).headers?.['x-edge-gate'],
+      ).toBeUndefined();
+    }
+  });
+
   it('redirects signed-in root to the active workspace overview', async () => {
     const { default: proxy } = await import('./proxy');
 

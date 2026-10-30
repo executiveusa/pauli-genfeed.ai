@@ -179,6 +179,34 @@ function getApiBaseUrl(): string {
   return rawBaseUrl;
 }
 
+/**
+ * Server-side calls the proxy itself makes to the API (`/auth/token`,
+ * `/auth/bootstrap`, `/organizations?mine=true`). Behind the edge gate the API
+ * host only answers requests that carry the gate header, and only the `/v1/*`
+ * rewrite below injects it. Without this, these server fetches get 403 (or
+ * cannot resolve), the bearer token comes back null and every protected page
+ * redirects to `/login` even with a valid session. The origin and secret come
+ * from server env only, the path is one of the fixed literals above, and no
+ * request-derived value reaches the URL or the gate header. Without the edge
+ * env (local, self-hosted) behaviour is unchanged.
+ */
+function buildServerApiRequest(
+  path: string,
+  headers: Record<string, string>,
+): { headers: Record<string, string>; url: string } {
+  const edgeOrigin = process.env.EDGE_API_ORIGIN?.trim().replace(/\/+$/, '');
+  const edgeSecret = process.env.EDGE_GATE_SECRET;
+
+  if (edgeOrigin && edgeSecret) {
+    return {
+      headers: { ...headers, 'x-edge-gate': edgeSecret },
+      url: `${edgeOrigin}/v1${path}`,
+    };
+  }
+
+  return { headers, url: `${getApiBaseUrl()}${path}` };
+}
+
 function canonicalizeFlatProtectedPath(pathname: string): string {
   return FLAT_PATH_REDIRECTS.get(pathname) ?? pathname;
 }
@@ -579,12 +607,14 @@ const bootstrapByRequest = new WeakMap<
 
 async function fetchBootstrap(token: string): Promise<BootstrapRead> {
   try {
-    const response = await fetch(`${getApiBaseUrl()}/auth/bootstrap`, {
+    const request = buildServerApiRequest('/auth/bootstrap', {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    });
+    const response = await fetch(request.url, {
       cache: 'no-store',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: request.headers,
+      redirect: 'manual',
     });
 
     if (!response.ok) {
@@ -669,16 +699,15 @@ async function readBootstrapWorkspaceSlugs(
     let organizationsResponse: Response;
 
     try {
-      organizationsResponse = await fetch(
-        `${getApiBaseUrl()}/organizations?mine=true`,
-        {
-          cache: 'no-store',
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      );
+      const request = buildServerApiRequest('/organizations?mine=true', {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+      });
+      organizationsResponse = await fetch(request.url, {
+        cache: 'no-store',
+        headers: request.headers,
+        redirect: 'manual',
+      });
     } catch {
       return null;
     }
@@ -998,9 +1027,13 @@ async function getBetterAuthBearerToken(
   }
 
   try {
-    const response = await fetch(`${getApiBaseUrl()}/auth/token`, {
+    const request = buildServerApiRequest('/auth/token', {
+      cookie: cookieHeader,
+    });
+    const response = await fetch(request.url, {
       cache: 'no-store',
-      headers: { cookie: cookieHeader },
+      headers: request.headers,
+      redirect: 'manual',
     });
 
     if (!response.ok) {
