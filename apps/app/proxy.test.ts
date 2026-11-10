@@ -654,9 +654,9 @@ describe('proxy', () => {
   });
 
   it('sends the edge gate header to the fixed edge API origin for server-side auth calls', async () => {
-    vi.stubEnv('EDGE_API_ORIGIN', 'https://edge.example.test/');
+    vi.stubEnv('EDGE_API_ORIGIN', 'https://genfeed-api.31.220.58.212.sslip.io/');
     vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
-    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://files.example.test');
+    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://genfeed-files.31.220.58.212.sslip.io');
     vi.resetModules();
 
     const { default: proxy } = await import('./proxy');
@@ -670,13 +670,13 @@ describe('proxy', () => {
       url: String(input),
     }));
     const urls = calls.map((call) => call.url);
-    expect(urls).toContain('https://edge.example.test/v1/auth/token');
-    expect(urls).toContain('https://edge.example.test/v1/auth/bootstrap');
+    expect(urls).toContain('https://genfeed-api.31.220.58.212.sslip.io/v1/auth/token');
+    expect(urls).toContain('https://genfeed-api.31.220.58.212.sslip.io/v1/auth/bootstrap');
     expect(urls).toContain(
-      'https://edge.example.test/v1/organizations?mine=true',
+      'https://genfeed-api.31.220.58.212.sslip.io/v1/organizations?mine=true',
     );
     for (const call of calls) {
-      expect(call.url.startsWith('https://edge.example.test/v1/')).toBe(true);
+      expect(call.url.startsWith('https://genfeed-api.31.220.58.212.sslip.io/v1/')).toBe(true);
       expect(call.headers?.['x-edge-gate']).toBe('test-gate-secret');
     }
     // the session cookie still goes only to the token exchange, never a bearer
@@ -691,9 +691,9 @@ describe('proxy', () => {
   });
 
   it('never follows a redirect on the server-side API calls that carry credentials', async () => {
-    vi.stubEnv('EDGE_API_ORIGIN', 'https://edge.example.test');
+    vi.stubEnv('EDGE_API_ORIGIN', 'https://genfeed-api.31.220.58.212.sslip.io');
     vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
-    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://files.example.test');
+    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://genfeed-files.31.220.58.212.sslip.io');
     vi.resetModules();
     fetchMock.mockImplementation(
       async () =>
@@ -713,7 +713,7 @@ describe('proxy', () => {
     );
     expect(fetchMock).toHaveBeenCalled();
     for (const [input, init] of fetchMock.mock.calls) {
-      expect(String(input).startsWith('https://edge.example.test/v1/')).toBe(
+      expect(String(input).startsWith('https://genfeed-api.31.220.58.212.sslip.io/v1/')).toBe(
         true,
       );
       expect((init as { redirect?: string }).redirect).toBe('manual');
@@ -723,22 +723,64 @@ describe('proxy', () => {
     ).toBe(false);
   });
 
-  it('never sends the gate secret to the plain API base when only the secret is configured', async () => {
+  it('fails closed before fetching when only the edge secret is configured', async () => {
     vi.stubEnv('EDGE_API_ORIGIN', undefined);
     vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
     vi.resetModules();
-
     const { default: proxy } = await import('./proxy');
+    const response = await proxy(makeSignedInRequest('/workspace'));
+    expect(new URL(response.headers.get('location') as string).pathname).toBe('/login');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    await proxy(makeSignedInRequest('/workspace'));
+  it.each([
+    'https://attacker.example',
+    'http://genfeed-api.31.220.58.212.sslip.io',
+    'https://genfeed-api.31.220.58.212.sslip.io.attacker.example',
+    'https://genfeed-api.31.220.58.212.sslip.io@attacker.example',
+    'https://genfeed-api.31.220.58.212.sslip.io/v1',
+    'https://genfeed-api.31.220.58.212.sslip.io?bad=1',
+  ])('rejects credential destination %s before any server fetch or rewrite', async (origin) => {
+    vi.stubEnv('EDGE_API_ORIGIN', origin);
+    vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
+    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://genfeed-files.31.220.58.212.sslip.io');
+    vi.resetModules();
+    const { default: proxy } = await import('./proxy');
+    const response = await proxy(makeSignedInRequest('/workspace'));
+    expect(new URL(response.headers.get('location') as string).pathname).toBe('/login');
+    expect(fetchMock).not.toHaveBeenCalled();
+    const api = await proxy(makeSignedInRequest('/v1/auth/token'));
+    expect(api.status).toBe(503);
+    expect(api.headers.get('x-middleware-rewrite')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    expect(fetchMock).toHaveBeenCalled();
-    for (const [input, init] of fetchMock.mock.calls) {
-      expect(String(input).startsWith('http://localhost:3010/v1/')).toBe(true);
-      expect(
-        (init as { headers?: Record<string, string> }).headers?.['x-edge-gate'],
-      ).toBeUndefined();
-    }
+  it('rejects wrong files origin before copying request credentials into a rewrite', async () => {
+    vi.stubEnv('EDGE_API_ORIGIN', 'https://genfeed-api.31.220.58.212.sslip.io');
+    vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
+    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://attacker.example');
+    vi.resetModules();
+    const { default: proxy } = await import('./proxy');
+    const response = await proxy(makeSignedInRequest('/local/test.png', {method:'GET'}));
+    expect(response.status).toBe(503);
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rewrites only the exact pinned API and files origins', async () => {
+    vi.stubEnv('EDGE_API_ORIGIN', 'https://genfeed-api.31.220.58.212.sslip.io/');
+    vi.stubEnv('EDGE_GATE_SECRET', 'test-gate-secret');
+    vi.stubEnv('EDGE_FILES_ORIGIN', 'https://genfeed-files.31.220.58.212.sslip.io');
+    vi.resetModules();
+    const { default: proxy } = await import('./proxy');
+    const apiRequest = makeSignedInRequest('/v1/health') as any;
+    apiRequest.headers = new Headers({cookie:'better-auth.session_token=test-session-token'});
+    const api = await proxy(apiRequest);
+    expect(api.headers.get('x-middleware-rewrite')).toBe('https://genfeed-api.31.220.58.212.sslip.io/v1/health');
+    const filesRequest = makeSignedInRequest('/local/test.png', {method:'GET'}) as any;
+    filesRequest.headers = new Headers({cookie:'better-auth.session_token=test-session-token'});
+    const files = await proxy(filesRequest);
+    expect(files.headers.get('x-middleware-rewrite')).toBe('https://genfeed-files.31.220.58.212.sslip.io/local/test.png');
   });
 
   it('keeps the plain API base and sends no gate header when the edge env is absent', async () => {

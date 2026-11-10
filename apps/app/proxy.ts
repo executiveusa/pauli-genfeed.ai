@@ -190,6 +190,17 @@ function getApiBaseUrl(): string {
  * request-derived value reaches the URL or the gate header. Without the edge
  * env (local, self-hosted) behaviour is unchanged.
  */
+const PINNED_EDGE_API_ORIGIN = 'https://genfeed-api.31.220.58.212.sslip.io';
+const PINNED_EDGE_FILES_ORIGIN = 'https://genfeed-files.31.220.58.212.sslip.io';
+
+function checkedEdgeOrigin(origin: string | undefined, expected: string): string {
+  const normalized = origin?.trim().replace(/\/+$/, '');
+  if (normalized !== expected) {
+    throw new Error('Invalid edge origin configuration');
+  }
+  return normalized;
+}
+
 function buildServerApiRequest(
   path: string,
   headers: Record<string, string>,
@@ -197,10 +208,14 @@ function buildServerApiRequest(
   const edgeOrigin = process.env.EDGE_API_ORIGIN?.trim().replace(/\/+$/, '');
   const edgeSecret = process.env.EDGE_GATE_SECRET;
 
-  if (edgeOrigin && edgeSecret) {
+  if (edgeOrigin || edgeSecret) {
+    const checkedOrigin = checkedEdgeOrigin(edgeOrigin, PINNED_EDGE_API_ORIGIN);
+    if (!edgeSecret) {
+      throw new Error('Missing edge gate configuration');
+    }
     return {
       headers: { ...headers, 'x-edge-gate': edgeSecret },
-      url: `${edgeOrigin}/v1${path}`,
+      url: `${checkedOrigin}/v1${path}`,
     };
   }
 
@@ -1480,9 +1495,15 @@ const EDGE_API_ORIGIN = process.env.EDGE_API_ORIGIN; // https://genfeed-api.31.2
 const EDGE_FILES_ORIGIN = process.env.EDGE_FILES_ORIGIN; // https://genfeed-files.31.220.58.212.sslip.io
 const EDGE_GATE_SECRET = process.env.EDGE_GATE_SECRET; // sensitive env, vault-held
 
-function proxyWithEdgeGate(request: NextRequest, origin: string) {
+function proxyWithEdgeGate(request: NextRequest, origin: string, expected: string) {
+  let checkedOrigin: string;
+  try {
+    checkedOrigin = checkedEdgeOrigin(origin, expected);
+  } catch {
+    return new NextResponse('edge not configured', { status: 503 });
+  }
   const url = new URL(request.url);
-  const upstream = origin + url.pathname + url.search;
+  const upstream = checkedOrigin + url.pathname + url.search;
   const headers = new Headers(request.headers);
   headers.set('x-edge-gate', EDGE_GATE_SECRET ?? '');
   headers.delete('host');
@@ -1503,7 +1524,7 @@ export async function proxy(req: NextRequest) {
     if (!EDGE_GATE_SECRET || !EDGE_API_ORIGIN || !EDGE_FILES_ORIGIN) {
       return new NextResponse('edge not configured', { status: 503 });
     }
-    return proxyWithEdgeGate(req, EDGE_API_ORIGIN);
+    return proxyWithEdgeGate(req, EDGE_API_ORIGIN, PINNED_EDGE_API_ORIGIN);
   }
 
   // Edge-gated media proxy: read-only (GET/HEAD), everything else 403.
@@ -1517,7 +1538,7 @@ export async function proxy(req: NextRequest) {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       return new NextResponse(null, { status: 403 });
     }
-    return proxyWithEdgeGate(req, EDGE_FILES_ORIGIN);
+    return proxyWithEdgeGate(req, EDGE_FILES_ORIGIN, PINNED_EDGE_FILES_ORIGIN);
   }
 
   const minimumVersionResponse = enforceMinimumDesktopVersion(req);
